@@ -1,4 +1,4 @@
-name: Fork APK build
+name: Fork release APK
 
 on:
   push:
@@ -11,12 +11,14 @@ permissions:
 
 env:
   GRADLE_OPTS: -Dorg.gradle.caching=true
+  FORK_KEY_ALIAS: neri
+  FORK_KEY_PASSWORD: neriforkrelease
 
 jobs:
-  build-debug-apk:
-    name: Build debug APK
+  build-release-apk:
+    name: Build release APK (coexisting package)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -39,14 +41,53 @@ jobs:
       - name: Install Android NDK
         uses: ./.github/actions/android-ndk
 
-      - name: Assemble debug APK
-        run: ./gradlew :app:assembleDebug --warning-mode all --stacktrace
+      - name: Prepare signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/signing"
+          mkdir -p "$dir"
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$dir/neri.jks"
+            echo "using keystore from repository secret"
+            echo "KEYSTORE_FROM_SECRET=true" >> "$GITHUB_ENV"
+          else
+            keytool -genkeypair -noprompt \
+              -keystore "$dir/neri.jks" -storetype JKS \
+              -keyalg RSA -keysize 2048 -validity 10950 \
+              -alias "$FORK_KEY_ALIAS" \
+              -storepass "$FORK_KEY_PASSWORD" -keypass "$FORK_KEY_PASSWORD" \
+              -dname "CN=NeriPlayer Fork, OU=Personal, O=Personal, L=Personal, ST=Personal, C=CN"
+            echo "no KEYSTORE_BASE64 secret: generated a new keystore"
+            echo "KEYSTORE_FROM_SECRET=false" >> "$GITHUB_ENV"
+          fi
+          echo "FORK_KEYSTORE=$dir/neri.jks" >> "$GITHUB_ENV"
 
-      - name: Upload APK
+      - name: Assemble release APK
+        run: |
+          ./gradlew :app:assembleRelease \
+            -PforkRelease=true \
+            -PKEYSTORE_FILE="$FORK_KEYSTORE" \
+            -PKEYSTORE_PASSWORD="$FORK_KEY_PASSWORD" \
+            -PKEY_ALIAS="$FORK_KEY_ALIAS" \
+            -PKEY_PASSWORD="$FORK_KEY_PASSWORD" \
+            --warning-mode all --stacktrace
+
+      - name: Upload release APK
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: neriplayer-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: neriplayer-fork-release-apk
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload generated keystore
+        if: env.KEYSTORE_FROM_SECRET == 'false'
+        uses: actions/upload-artifact@v6
+        with:
+          name: signing-keystore
+          path: ${{ env.FORK_KEYSTORE }}
+          if-no-files-found: error
           retention-days: 14
