@@ -54,6 +54,8 @@ val releaseSigningReady = releaseKeystoreFile.exists() &&
     !releaseStorePassword.isNullOrBlank() &&
     releaseKeyAlias.isNotBlank() &&
     !releaseKeyPassword.isNullOrBlank()
+// 个人 fork 的正式版构建开关：换一个可共存的包名，避免和官方包互相覆盖
+val forkRelease = (project.findProperty("forkRelease") as String?)?.toBoolean() == true
 
 android {
     namespace = "moe.ouom.neriplayer"
@@ -129,6 +131,14 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            if (forkRelease) {
+                // 与官方包共存：独立 applicationId、独立深链 scheme、独立应用名
+                applicationIdSuffix = ".fork"
+                val forkInviteScheme = "neriplayer-fork"
+                manifestPlaceholders["listenTogetherInviteScheme"] = forkInviteScheme
+                buildConfigField("String", "LISTEN_TOGETHER_INVITE_SCHEME", "\"$forkInviteScheme\"")
+                resValue("string", "app_name", "NeriPlayer Fork")
+            }
             if (!buildAllReleaseAbis) {
                 ndk {
                     // Regular release stays lean; manual release can opt into all ABI splits.
