@@ -1,0 +1,52 @@
+name: Fork APK build
+
+on:
+  push:
+    branches:
+      - feat/lyrico-external-tag-edit
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.caching=true
+
+jobs:
+  build-debug-apk:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Install Android NDK
+        uses: ./.github/actions/android-ndk
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug --warning-mode all --stacktrace
+
+      - name: Upload APK
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: neriplayer-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 14
