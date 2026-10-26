@@ -12,6 +12,7 @@ import moe.ouom.neriplayer.common.R as CoreCommonR
 import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.data.identity.stableKey as songStableKey
 import moe.ouom.neriplayer.common.logging.NPLogger
+import moe.ouom.neriplayer.lyrics.embedded.splitBilingualLyrics
 import java.io.File
 import kotlin.math.max
 
@@ -517,6 +518,11 @@ internal fun LocalMediaSupport.inspectImpl(context: Context, uri: Uri): LocalMed
             ?.takeIf { it.hasRomanizedLyricOverride }
             ?.romanizedLyric
     )
+    // 外部标签工具常把译文写在原文下一行并复用时间戳；这里先拆开，避免译文再被当成原文显示
+    val splitLyricContent = splitBilingualLyrics(
+        original = effectiveLyricContent,
+        translated = effectiveTranslatedLyricContent
+    )
 
     val retriever = MediaMetadataRetriever()
     return try {
@@ -660,19 +666,19 @@ internal fun LocalMediaSupport.inspectImpl(context: Context, uri: Uri): LocalMed
                 }
                 else -> null
             },
-            lyricContent = effectiveLyricContent,
+            lyricContent = splitLyricContent.original,
             lyricPath = resolveEffectiveLocalLyricPath(
                 reference = nearbyLyricReferences.original
                     ?: nearbyLyricFiles.original?.absolutePath
                     ?: localMetadata?.reference?.takeIf { localMetadata.hasLyricOverride },
-                content = effectiveLyricContent
+                content = splitLyricContent.original
             ),
             lyricSource = when {
                 hasEffectiveExternalLyric -> context.getString(CoreCommonR.string.local_song_lyric_external)
-                !effectiveLyricContent.isNullOrBlank() -> context.getString(CoreCommonR.string.local_song_lyric_embedded)
+                !splitLyricContent.original.isNullOrBlank() -> context.getString(CoreCommonR.string.local_song_lyric_embedded)
                 else -> null
             },
-            translatedLyricContent = effectiveTranslatedLyricContent,
+            translatedLyricContent = splitLyricContent.translated,
             romanizedLyricContent = effectiveRomanizedLyricContent,
             originalTitle = title,
             originalArtist = tagLibMetadata?.artist.takeMeaningfulLocalMetadata()
@@ -751,19 +757,19 @@ internal fun LocalMediaSupport.inspectImpl(context: Context, uri: Uri): LocalMed
                 tagLibCoverUri != null -> context.getString(CoreCommonR.string.local_song_cover_embedded)
                 else -> null
             },
-            lyricContent = effectiveLyricContent,
+            lyricContent = splitLyricContent.original,
             lyricPath = resolveEffectiveLocalLyricPath(
                 reference = nearbyLyricReferences.original
                     ?: nearbyLyricFiles.original?.absolutePath
                     ?: localMetadata?.reference?.takeIf { localMetadata.hasLyricOverride },
-                content = effectiveLyricContent
+                content = splitLyricContent.original
             ),
             lyricSource = when {
                 hasEffectiveExternalLyric -> context.getString(CoreCommonR.string.local_song_lyric_external)
-                !effectiveLyricContent.isNullOrBlank() -> context.getString(CoreCommonR.string.local_song_lyric_embedded)
+                !splitLyricContent.original.isNullOrBlank() -> context.getString(CoreCommonR.string.local_song_lyric_embedded)
                 else -> null
             },
-            translatedLyricContent = effectiveTranslatedLyricContent,
+            translatedLyricContent = splitLyricContent.translated,
             romanizedLyricContent = effectiveRomanizedLyricContent,
             originalTitle = title,
             originalArtist = tagLibMetadata?.artist.takeMeaningfulLocalMetadata()

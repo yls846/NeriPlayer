@@ -23,6 +23,7 @@ import kotlinx.coroutines.withContext
 import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.data.identity.stableKey as songStableKey
 import moe.ouom.neriplayer.common.logging.NPLogger
+import moe.ouom.neriplayer.lyrics.embedded.splitBilingualLyrics
 import moe.ouom.neriplayer.common.io.isFileInsideDirectory
 import java.io.File
 
@@ -402,10 +403,17 @@ internal fun LocalMediaSupport.inspectLyricsFastImpl(
             embedded?.embeddedRomanizedLyric, embedded?.embeddedSourceResolved == true
         )
     )
+    // 外部工具写回的双语歌词：把紧跟原文、同时间戳的译文归入译文通道，避免重复显示成两行原文
+    val splitLyrics = splitBilingualLyrics(result.lyric, result.translatedLyric)
+    val finalResult = if (splitLyrics.translated == null) {
+        result
+    } else {
+        result.copy(lyric = splitLyrics.original, translatedLyric = splitLyrics.translated)
+    }
     if (cacheable && !forceRefresh) {
         synchronized(localLyricsLookupCache) {
             localLyricsLookupCache[cacheKey] = LocalLyricsCacheEntry(
-                value = result,
+                value = finalResult,
                 cachedAtMs = System.currentTimeMillis()
             )
         }
@@ -420,9 +428,9 @@ internal fun LocalMediaSupport.inspectLyricsFastImpl(
             else -> "stored"
         },
         startedAt = startedAt,
-        result = result
+        result = finalResult
     )
-    return result
+    return finalResult
 }
 
 internal fun LocalMediaSupport.inspectEmbeddedLyricsImpl(
@@ -460,12 +468,13 @@ internal fun LocalMediaSupport.inspectEmbeddedLyricsImpl(
         } catch (_: Exception) {
             null
         } ?: return@forEach
+        val splitLyrics = splitBilingualLyrics(metadata.lyrics, metadata.translatedLyrics)
         return LocalLyricsScanMetadata(
-            lyric = metadata.lyrics,
-            translatedLyric = metadata.translatedLyrics,
+            lyric = splitLyrics.original,
+            translatedLyric = splitLyrics.translated,
             romanizedLyric = metadata.romanizedLyrics,
-            embeddedLyric = metadata.lyrics,
-            embeddedTranslatedLyric = metadata.translatedLyrics,
+            embeddedLyric = splitLyrics.original,
+            embeddedTranslatedLyric = splitLyrics.translated,
             embeddedRomanizedLyric = metadata.romanizedLyrics,
             embeddedSourceResolved = true
         )
