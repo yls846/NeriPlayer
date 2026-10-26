@@ -137,4 +137,5 @@
     <string name="local_song_lyrico_refresh_success">Song info refreshed from the edited file</string>
     <string name="local_song_lyrico_refresh_unavailable">Lyrico saved the file, but it could not be read back</string>
     <string name="local_song_lyrico_refresh_failed">Lyrico saved the file, but refreshing song info failed</string>
+    <string name="local_song_lyrico_write_back_failed">Lyrico saved the file, but writing it back failed</string>
 </resources>

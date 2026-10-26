@@ -8,6 +8,7 @@ import android.provider.MediaStore
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import java.io.File
+import moe.ouom.neriplayer.common.logging.NPLogger
 import moe.ouom.neriplayer.data.local.media.LocalMediaSupport
 import moe.ouom.neriplayer.data.local.media.LocalSongSupport
 import moe.ouom.neriplayer.data.local.media.embeddedCoverCacheLookupKeysImpl
@@ -24,16 +25,31 @@ private const val MANAGED_MEDIA_DIRECTORY = "NeriPlayer"
 
 private const val FALLBACK_AUDIO_MIME_TYPE = "audio/*"
 
+private const val TAG = "LocalMediaExternalTagEdit"
+
+/**
+ * 外部编辑器保存后需要回写原文件的缓存副本。
+ *
+ * SAF 文档的写权限无法可靠转发给另一个应用，所以这类歌曲先复制一份到应用缓存交给编辑器，
+ * 保存成功后由 [LocalMediaExternalTagEdit.commitWriteBack] 把缓存副本写回 [originalUri]。
+ */
+data class LocalMediaExternalTagWriteBack(
+    val originalUri: Uri,
+    val stagedFile: File
+)
+
 /**
  * 可以交给外部标签编辑器（如 Lyrico）读写的本地音频目标。
  *
- * [grantWrite] 只表示当前应用确实能授出写权限：受控目录里的文件与拿到写授权的 content
- * 引用为 true，MediaStore 条目通常为 false，由外部编辑器自行向系统申请写授权。
+ * [grantWrite] 只表示当前应用确实能授出写权限：受控目录里的文件、缓存副本与拿到写授权的
+ * content 引用为 true，MediaStore 条目通常为 false，由外部编辑器自行向系统申请写授权。
+ * [writeBack] 非 null 时说明编辑器改的是缓存副本，保存后必须回写原引用。
  */
 data class LocalMediaExternalTagEditTarget(
     val uri: Uri,
     val mimeType: String,
-    val grantWrite: Boolean
+    val grantWrite: Boolean,
+    val writeBack: LocalMediaExternalTagWriteBack? = null
 )
 
 /** 交给外部编辑器前的解析结果 */
@@ -75,7 +91,7 @@ object LocalMediaExternalTagEdit {
         song.localMediaUriCandidates().forEach { candidate ->
             val target = when {
                 candidate.scheme.equals("content", ignoreCase = true) ->
-                    resolveContentTarget(context, candidate)
+                    resolveContentTarget(context, candidate, song)
                 else -> resolveFileTarget(context, candidate)
             } ?: return@forEach
             return LocalMediaExternalTagEditResolution.Editable(target)
@@ -83,25 +99,73 @@ object LocalMediaExternalTagEdit {
         return LocalMediaExternalTagEditResolution.Unavailable
     }
 
+    /**
+     * 把编辑器保存后的缓存副本写回原 SAF 文档。写入失败时原文档保持不变，并保留缓存副本供重试。
+     */
+    fun commitWriteBack(context: Context, writeBack: LocalMediaExternalTagWriteBack): Boolean {
+        if (!writeBack.stagedFile.isFile) return false
+        val committed = runCatching {
+            val output = context.contentResolver.openOutputStream(writeBack.originalUri, "wt")
+                ?: return@runCatching false
+            output.use { stream ->
+                writeBack.stagedFile.inputStream().use { input -> input.copyTo(stream) }
+            }
+            true
+        }.getOrElse { error ->
+            NPLogger.w(
+                TAG,
+                "write back edited copy failed for ${writeBack.originalUri}: ${error.message}"
+            )
+            false
+        }
+        if (committed) {
+            writeBack.stagedFile.delete()
+        }
+        return committed
+    }
+
     private fun resolveContentTarget(
         context: Context,
-        uri: Uri
+        uri: Uri,
+        song: SongItem
     ): LocalMediaExternalTagEditTarget? {
         if (!isReadable(context, uri)) return null
-        // 与外部编辑器保存时的第一步一致：能在这里以 rw 打开，才能保证文件真的可写
-        val writesInPlace = isWritable(context, uri)
+        val mimeType = context.contentResolver.getType(uri).asAudioMimeType()
         if (uri.authority == MediaStore.AUTHORITY) {
-            // Android 11 起 MediaStore 条目可以由外部编辑器自己申请系统写授权；
-            // Android 10 没有可转交的申请入口，交出去只会得到无法保存的编辑页
+            // MediaStore 条目可以由外部编辑器自己申请系统写授权；Android 10 没有该入口，
+            // 交出去只会得到一个无法保存的编辑页
+            val writesInPlace = isWritable(context, uri)
             if (!writesInPlace && Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) return null
-        } else if (!writesInPlace) {
-            // 其他 content 引用拿不到可转授的写权限就无处保存，不能退化成只读编辑
+            return LocalMediaExternalTagEditTarget(
+                uri = uri,
+                mimeType = mimeType,
+                grantWrite = writesInPlace
+            )
+        }
+        // SAF 等文档引用的写权限无法可靠转发给另一个应用：先复制一份交给编辑器，
+        // 保存返回后再把副本写回原文档，避免出现「编辑器里保存了、原文件没变」
+        if (!isWritable(context, uri)) return null
+        val stagedFile = LocalMediaSupport.prepareShareableContentFile(
+            context = context,
+            sourceUri = uri,
+            suggestedName = song.localFileName ?: song.name
+        ) ?: return null
+        val authority = context.packageName + FILE_PROVIDER_AUTHORITY_SUFFIX
+        val stagedUri = runCatching {
+            FileProvider.getUriForFile(context, authority, stagedFile)
+        }.getOrNull()
+        if (stagedUri == null) {
+            stagedFile.delete()
             return null
         }
         return LocalMediaExternalTagEditTarget(
-            uri = uri,
-            mimeType = context.contentResolver.getType(uri).asAudioMimeType(),
-            grantWrite = writesInPlace
+            uri = stagedUri,
+            mimeType = mimeType,
+            grantWrite = true,
+            writeBack = LocalMediaExternalTagWriteBack(
+                originalUri = uri,
+                stagedFile = stagedFile
+            )
         )
     }
 

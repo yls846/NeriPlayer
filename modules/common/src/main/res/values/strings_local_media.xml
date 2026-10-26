@@ -134,4 +134,5 @@
     <string name="local_song_lyrico_refresh_success">已按文件内容刷新歌曲信息</string>
     <string name="local_song_lyrico_refresh_unavailable">Lyrico 已保存，但无法重新读取该文件</string>
     <string name="local_song_lyrico_refresh_failed">Lyrico 已保存，但刷新歌曲信息失败</string>
+    <string name="local_song_lyrico_write_back_failed">Lyrico 已保存，但写回原文件失败</string>
 </resources>

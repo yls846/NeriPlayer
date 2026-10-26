@@ -98,6 +98,7 @@ import moe.ouom.neriplayer.data.model.playback.PlaybackAudioInfo
 import moe.ouom.neriplayer.data.local.media.LocalMediaSupport
 import moe.ouom.neriplayer.data.local.media.external.LocalMediaExternalTagEdit
 import moe.ouom.neriplayer.data.local.media.external.LocalMediaExternalTagEditResolution
+import moe.ouom.neriplayer.data.local.media.external.LocalMediaExternalTagEditTarget
 import moe.ouom.neriplayer.data.local.media.external.LocalSongFileRefreshResult
 import moe.ouom.neriplayer.data.local.media.isLocalSong
 import moe.ouom.neriplayer.data.model.SongItem
@@ -343,12 +344,36 @@ private fun ExternalTagEditAction(
     val coroutineScope = rememberCoroutineScope()
     val latestSong = rememberUpdatedState(song)
     var waitingForEditor by remember(song.stableKey()) { mutableStateOf(false) }
+    var pendingTarget by remember(song.stableKey()) {
+        mutableStateOf<LocalMediaExternalTagEditTarget?>(null)
+    }
     val editLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         waitingForEditor = false
-        if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
+        val target = pendingTarget
+        pendingTarget = null
+        if (result.resultCode != Activity.RESULT_OK) {
+            // 取消编辑时丢弃缓存副本，避免留下无用的暂存文件
+            target?.writeBack?.stagedFile?.delete()
+            return@rememberLauncherForActivityResult
+        }
         coroutineScope.launch {
+            val writeBack = target?.writeBack
+            if (writeBack != null) {
+                val committed = withContext(Dispatchers.IO) {
+                    LocalMediaExternalTagEdit.commitWriteBack(context, writeBack)
+                }
+                if (!committed) {
+                    AppFeedback.showToast(
+                        context = context,
+                        message = composeResources.getString(
+                            CoreCommonR.string.local_song_lyrico_write_back_failed
+                        )
+                    )
+                    return@launch
+                }
+            }
             val outcome = try {
                 PlayerManager.refreshLocalSongAfterExternalTagEdit(latestSong.value)
             } catch (cancellation: CancellationException) {
@@ -386,7 +411,11 @@ private fun ExternalTagEditAction(
                         return@launch
                     }
                     editorStarted = lyricoTagEditIntents(target).any { intent -> editLauncher.tryLaunch(intent) }
-                    if (!editorStarted) {
+                    if (editorStarted) {
+                        // 结果回调晚于当前调用栈返回，这里记录待回写的缓存副本是安全的
+                        pendingTarget = target
+                    } else {
+                        target.writeBack?.stagedFile?.delete()
                         snackbarHostState.showNeriSnackbar(
                             composeResources.getString(CoreCommonR.string.local_song_lyrico_missing)
                         )
