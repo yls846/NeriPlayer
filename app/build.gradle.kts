@@ -168,6 +168,8 @@ android {
     }
     buildFeatures {
         buildConfig = true
+        // fork 正式版用 resValue 覆盖启动器名称；AGP 9 默认关闭该特性
+        resValues = true
     }
 
     testOptions {
